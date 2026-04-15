@@ -3,21 +3,20 @@ package claudebox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHealth(t *testing.T) {
 	c, _ := testServer(
 		t,
 		func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet ||
-				r.URL.Path != "/health" {
-				t.Errorf(
-					"unexpected request: %s %s",
-					r.Method, r.URL.Path,
-				)
-			}
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "/health", r.URL.Path)
 
 			_ = json.NewEncoder(w).Encode(
 				HealthResponse{Status: "ok"},
@@ -26,30 +25,38 @@ func TestHealth(t *testing.T) {
 	)
 
 	resp, err := c.Health(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Status)
+}
 
-	if resp.Status != "ok" {
-		t.Errorf("got status %q, want ok", resp.Status)
-	}
+func TestHealthServerDown(t *testing.T) {
+	c := New("http://127.0.0.1:1")
+
+	_, err := c.Health(context.Background())
+	require.Error(t, err)
+}
+
+func TestHealthInvalidJSON(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t, `{not json`),
+	)
+
+	_, err := c.Health(context.Background())
+	require.Error(t, err)
 }
 
 func TestStatus(t *testing.T) {
 	c, _ := testServer(
 		t,
 		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/status" {
-				t.Errorf(
-					"unexpected path: %s",
-					r.URL.Path,
-				)
-			}
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "/status", r.URL.Path)
 
 			_ = json.NewEncoder(w).Encode(
 				StatusResponse{
 					BusyWorkspaces: []string{
 						"/workspaces/foo",
+						"/workspaces/bar",
 					},
 				},
 			)
@@ -57,15 +64,46 @@ func TestStatus(t *testing.T) {
 	)
 
 	resp, err := c.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"/workspaces/foo",
+		"/workspaces/bar",
+	}, resp.BusyWorkspaces)
+}
 
-	if len(resp.BusyWorkspaces) != 1 ||
-		resp.BusyWorkspaces[0] != "/workspaces/foo" {
-		t.Errorf(
-			"unexpected busy workspaces: %v",
-			resp.BusyWorkspaces,
-		)
-	}
+func TestStatusEmpty(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t, `{"busyWorkspaces":[]}`),
+	)
+
+	resp, err := c.Status(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, resp.BusyWorkspaces)
+}
+
+func TestStatusInvalidJSON(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t, `{not json`),
+	)
+
+	_, err := c.Status(context.Background())
+	require.Error(t, err)
+}
+
+func TestStatus401(t *testing.T) {
+	c, _ := testServer(t,
+		errorHandler(t,
+			http.StatusUnauthorized,
+			`{"detail":"unauthorized"}`,
+		),
+	)
+
+	_, err := c.Status(context.Background())
+	require.Error(t, err)
+
+	var apiErr *APIError
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t,
+		http.StatusUnauthorized, apiErr.StatusCode,
+	)
 }

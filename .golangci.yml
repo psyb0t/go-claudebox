@@ -89,6 +89,8 @@ linters:
           allow:
             - $gostd
             - github.com/psyb0t
+            - github.com/stretchr/testify
+            - github.com/joho/godotenv
   exclusions:
     generated: lax
     presets:

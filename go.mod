@@ -5,8 +5,10 @@ go 1.26
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 require (
+	github.com/joho/godotenv v1.5.1
 	github.com/psyb0t/common-go v0.0.0-20260415153010-57361c669dca
 	github.com/psyb0t/ctxerrors v0.2.3
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
@@ -176,7 +178,6 @@ require (
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.3.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tetafro/godot v1.5.4 // indirect
 	github.com/timakin/bodyclose v0.0.0-20241222091800-1db5c5ca4d67 // indirect

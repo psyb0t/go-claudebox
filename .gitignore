@@ -1,2 +1,5 @@
 .vscode
 coverage.*
+CLAUDE.md
+.research_files
+.env.test

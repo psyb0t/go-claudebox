@@ -25,6 +25,10 @@ test: ## Run all tests
 	@echo "Running all tests..."
 	@go test -race ./...
 
+test-with-real: ## Run all tests including integration tests against a live claudebox instance
+	@echo "Running all tests including real integration tests..."
+	@go test -race -tags=real -timeout=5m ./...
+
 test-coverage: ## Run tests with coverage check. Fails if coverage is below the threshold.
 	@echo "Running tests with coverage check..."
 	@trap 'rm -f coverage.txt' EXIT; \

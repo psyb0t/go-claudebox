@@ -64,12 +64,28 @@ func (c *Client) ListFiles(
 	return &v, nil
 }
 
-// ReadFile downloads a file and returns its contents
-// as bytes.
+// ReadFileResponse wraps a streamed file download.
+// The caller must close Body when done reading.
+type ReadFileResponse struct {
+	// ContentType is the MIME type from the server
+	// (e.g. "text/plain", "application/octet-stream").
+	ContentType string
+
+	// ContentLength is the file size in bytes, or -1
+	// if the server did not send Content-Length.
+	ContentLength int64
+
+	// Body is the file data stream. The caller must
+	// close it when done.
+	Body io.ReadCloser
+}
+
+// ReadFile downloads a file and returns a streaming
+// response. The caller must close Body when done.
 func (c *Client) ReadFile(
 	ctx context.Context,
 	filePath string,
-) ([]byte, error) {
+) (*ReadFileResponse, error) {
 	endpoint := "/files/" +
 		strings.TrimLeft(filePath, "/")
 
@@ -80,20 +96,17 @@ func (c *Client) ReadFile(
 		return nil, err
 	}
 
-	defer func() { _ = resp.Body.Close() }()
-
 	if err := checkStatus(resp); err != nil {
+		_ = resp.Body.Close()
+
 		return nil, err
 	}
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, ctxerrors.Wrap(
-			err, "read file body",
-		)
-	}
-
-	return data, nil
+	return &ReadFileResponse{
+		ContentType:   resp.Header.Get("Content-Type"),
+		ContentLength: resp.ContentLength,
+		Body:          resp.Body,
+	}, nil
 }
 
 // WriteFileResponse is the response from

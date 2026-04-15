@@ -1,15 +1,18 @@
 # go-claudebox
 
-Go client for the [claudebox](https://github.com/psyb0t/claudebox) API. Lets you run Claude Code prompts, manage files, and check server status from Go.
+Go client for the [claudebox](https://github.com/psyb0t/docker-claudebox) API. Lets you run Claude Code prompts, manage files, and check server status from Go.
 
 ## Features
 
 - Run prompts (sync, fire-and-forget, resume sessions)
+- Full verbose output with typed turns, tool calls, and tool results
 - Upload, download, list, and delete workspace files
 - Check health, status, and cancel running jobs
 - Bearer token auth
-- Minimal dependencies — only [ctxerrors](https://github.com/psyb0t/ctxerrors) and [common-go](https://github.com/psyb0t/common-go)
-- Strict linting with zero `//nolint` directives
+- **Mockable** — `Claudebox` interface for easy testing
+- Minimal dependencies — [ctxerrors](https://github.com/psyb0t/ctxerrors), [common-go](https://github.com/psyb0t/common-go), [testify](https://github.com/stretchr/testify), [godotenv](https://github.com/joho/godotenv)
+- Integration tests against a live claudebox instance (`go test -tags=real`)
+- Strict linting
 
 ## Install
 
@@ -25,7 +28,9 @@ package main
 import (
     "context"
     "fmt"
+    "io"
     "log"
+    "os"
 
     claudebox "github.com/psyb0t/go-claudebox"
 )
@@ -49,6 +54,29 @@ func main() {
         log.Fatal(err)
     }
     fmt.Println(resp.Result)
+    fmt.Printf("cost: $%.4f, turns: %d\n", resp.TotalCostUSD, resp.NumTurns)
+
+    // Run with verbose output (includes tool call history)
+    verbose, err := c.Run(context.Background(), &claudebox.RunRequest{
+        Prompt:       "read main.go and explain it",
+        Model:        "haiku",
+        OutputFormat: "json-verbose",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    for _, turn := range verbose.Turns {
+        for _, block := range turn.Content {
+            switch block.Type {
+            case "tool_use":
+                fmt.Printf("[%s] %s\n", block.Name, string(block.Input))
+            case "tool_result":
+                fmt.Printf("  → %s\n", block.Content)
+            case "text":
+                fmt.Println(block.Text)
+            }
+        }
+    }
 
     // Upload a file
     _, err = c.WriteFile(context.Background(), "notes.txt", []byte("hello"))
@@ -56,12 +84,48 @@ func main() {
         log.Fatal(err)
     }
 
-    // Read it back
-    data, err := c.ReadFile(context.Background(), "notes.txt")
+    // Read it back (streaming — caller closes Body)
+    file, err := c.ReadFile(context.Background(), "notes.txt")
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Println(string(data))
+    defer file.Body.Close()
+    fmt.Printf("type: %s, size: %d\n", file.ContentType, file.ContentLength)
+    io.Copy(os.Stdout, file.Body)
+}
+```
+
+## Mocking
+
+The `Claudebox` interface makes testing straightforward:
+
+```go
+type mockClient struct {
+    runFunc func(ctx context.Context, req *claudebox.RunRequest) (*claudebox.RunResponse, error)
+}
+
+func (m *mockClient) Run(ctx context.Context, req *claudebox.RunRequest) (*claudebox.RunResponse, error) {
+    return m.runFunc(ctx, req)
+}
+
+func (m *mockClient) Health(context.Context) (*claudebox.HealthResponse, error) {
+    return &claudebox.HealthResponse{Status: "ok"}, nil
+}
+
+// ... implement other methods as needed
+
+func TestMyService(t *testing.T) {
+    mock := &mockClient{
+        runFunc: func(_ context.Context, req *claudebox.RunRequest) (*claudebox.RunResponse, error) {
+            return &claudebox.RunResponse{
+                Result:  "mocked response",
+                IsError: false,
+            }, nil
+        },
+    }
+
+    svc := NewMyService(mock) // your code accepts claudebox.Claudebox
+    // test away
 }
 ```
 
@@ -75,7 +139,7 @@ func main() {
 | `Run(ctx, *RunRequest)` | `POST /run` — execute prompt |
 | `Cancel(ctx, workspace)` | `POST /run/cancel` |
 | `ListFiles(ctx, path)` | `GET /files` or `GET /files/{path}` |
-| `ReadFile(ctx, path)` | `GET /files/{path}` — raw bytes |
+| `ReadFile(ctx, path)` | `GET /files/{path}` — streaming download |
 | `WriteFile(ctx, path, content)` | `PUT /files/{path}` |
 | `DeleteFile(ctx, path)` | `DELETE /files/{path}` |
 
@@ -96,11 +160,82 @@ func main() {
 | `SystemPrompt` | `systemPrompt` | Override system prompt |
 | `AppendSystemPrompt` | `appendSystemPrompt` | Append to system prompt |
 | `JSONSchema` | `jsonSchema` | Constrain output to schema |
-| `Effort` | `effort` | low, medium, high |
-| `OutputFormat` | `outputFormat` | e.g. json-verbose |
+| `Effort` | `effort` | low, medium, high, max |
+| `OutputFormat` | `outputFormat` | json (default) or json-verbose |
 | `NoContinue` | `noContinue` | Don't auto-continue |
 | `Resume` | `resume` | Resume a previous session |
 | `FireAndForget` | `fireAndForget` | Start and return immediately |
+
+### RunResponse fields
+
+| Field | JSON | What |
+|---|---|---|
+| `Type` | `type` | Always "result" |
+| `Subtype` | `subtype` | "success" or "error" |
+| `Result` | `result` | The response text |
+| `IsError` | `isError` | Whether the run errored |
+| `NumTurns` | `numTurns` | Number of conversation turns |
+| `DurationMs` | `durationMs` | Total duration in ms |
+| `DurationAPIMs` | `durationApiMs` | API call duration in ms |
+| `StopReason` | `stopReason` | Why the run stopped (e.g. "end_turn") |
+| `SessionID` | `sessionId` | Session ID for resuming |
+| `TotalCostUSD` | `totalCostUsd` | Total cost in USD |
+| `UUID` | `uuid` | Unique run identifier |
+| `FastModeState` | `fastModeState` | Fast mode state ("off", "on") |
+| `Usage` | `usage` | Token usage (see Usage) |
+| `ModelUsage` | `modelUsage` | Per-model stats map (see ModelStats) |
+| `Turns` | `turns` | Conversation turns (json-verbose only) |
+| `System` | `system` | Session metadata (json-verbose only) |
+| `PermissionDenials` | `permissionDenials` | Any permission denials |
+
+### Usage fields
+
+| Field | What |
+|---|---|
+| `InputTokens` | Input token count |
+| `OutputTokens` | Output token count |
+| `CacheCreationInputTokens` | Tokens used to create cache |
+| `CacheReadInputTokens` | Tokens read from cache |
+| `ServerToolUse` | Web search/fetch counters (`WebSearchRequests`, `WebFetchRequests`) |
+| `ServiceTier` | Service tier (e.g. "standard") |
+| `CacheCreation` | Cache creation breakdown (`Ephemeral1hInputTokens`, `Ephemeral5mInputTokens`) |
+| `InferenceGeo` | Inference region (e.g. "us-east-1") |
+| `Iterations` | Per-iteration breakdown (raw JSON) |
+| `Speed` | Speed tier (e.g. "standard") |
+
+### ModelStats fields
+
+Per-model usage in `ModelUsage` map (keyed by model ID like `"claude-haiku-4-5-20251001"`):
+
+| Field | What |
+|---|---|
+| `InputTokens` | Input tokens for this model |
+| `OutputTokens` | Output tokens for this model |
+| `CacheReadInputTokens` | Tokens read from cache |
+| `CacheCreationInputTokens` | Tokens used to create cache |
+| `WebSearchRequests` | Web search requests made |
+| `CostUSD` | Cost in USD for this model |
+| `ContextWindow` | Context window size |
+| `MaxOutputTokens` | Max output tokens |
+
+### Turn and ContentBlock
+
+Verbose output includes `[]Turn`, each with `Role` ("assistant" or "tool_result") and `[]ContentBlock`.
+
+Content block types:
+- **text**: `Text` field set
+- **tool_use**: `ID`, `Name`, `Input` (json.RawMessage) set
+- **tool_result**: `ToolUseID`, `IsError`, `Content` set. Optionally `Truncated`, `TotalLength`, `SHA256` for large results.
+
+### ReadFileResponse
+
+`ReadFile` returns a streaming response instead of buffering the entire file in memory:
+
+| Field | Type | What |
+|---|---|---|
+| `ContentType` | `string` | MIME type (e.g. "text/plain", "application/octet-stream") |
+| `ContentLength` | `int64` | File size in bytes, or -1 if unknown |
+| `Body` | `io.ReadCloser` | Streaming file data — caller must close |
 
 ### Error handling
 
@@ -112,6 +247,31 @@ if errors.As(err, &apiErr) {
     fmt.Printf("HTTP %d: %s\n", apiErr.StatusCode, apiErr.Body)
 }
 ```
+
+## Testing
+
+Unit tests run without any external dependencies:
+
+```bash
+make test
+# or: go test -race ./...
+```
+
+Integration tests run against a live claudebox instance. Create `.env.test` with your instance details:
+
+```bash
+CLAUDEBOX_URL=http://localhost:8080
+CLAUDEBOX_TOKEN=your-api-token
+```
+
+Then run:
+
+```bash
+make test-with-real
+# or: go test -race -tags=real -timeout=5m ./...
+```
+
+The integration tests verify every response field is properly deserialized — token counts, model usage, cost, turns with tool calls, system info, content types, the works.
 
 ## License
 

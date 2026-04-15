@@ -5,22 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAuthTokenSent(t *testing.T) {
 	c, _ := testServerWithToken(
 		t, "secret123",
 		func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
-			if auth != "Bearer secret123" {
-				t.Errorf(
-					"got auth %q, want Bearer secret123",
-					auth,
-				)
-			}
+			assert.Equal(t,
+				"Bearer secret123",
+				r.Header.Get("Authorization"),
+			)
 
 			_ = json.NewEncoder(w).Encode(
 				HealthResponse{Status: "ok"},
@@ -29,22 +28,16 @@ func TestAuthTokenSent(t *testing.T) {
 	)
 
 	_, err := c.Health(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
 func TestNoTokenByDefault(t *testing.T) {
 	c, _ := testServer(
 		t,
 		func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
-			if auth != "" {
-				t.Errorf(
-					"expected no auth header, got %q",
-					auth,
-				)
-			}
+			assert.Empty(t,
+				r.Header.Get("Authorization"),
+			)
 
 			_ = json.NewEncoder(w).Encode(
 				HealthResponse{Status: "ok"},
@@ -53,48 +46,63 @@ func TestNoTokenByDefault(t *testing.T) {
 	)
 
 	_, err := c.Health(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
 func TestAPIError(t *testing.T) {
-	c, _ := testServer(
-		t,
-		func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write(
-				[]byte(`{"detail":"unauthorized"}`),
-			)
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			"unauthorized",
+			http.StatusUnauthorized,
+			`{"detail":"unauthorized"}`,
 		},
-	)
-
-	_, err := c.Status(context.Background())
-	if err == nil {
-		t.Fatal("expected error")
+		{
+			"not found",
+			http.StatusNotFound,
+			`{"detail":"not found"}`,
+		},
+		{
+			"conflict",
+			http.StatusConflict,
+			`{"detail":"workspace busy"}`,
+		},
+		{
+			"bad request",
+			http.StatusBadRequest,
+			`{"detail":"path outside root"}`,
+		},
+		{
+			"internal server error",
+			http.StatusInternalServerError,
+			`{"detail":"boom"}`,
+		},
 	}
 
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("expected *APIError, got %T", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := testServer(t,
+				errorHandler(t, tt.status, tt.body),
+			)
 
-	if apiErr.StatusCode != http.StatusUnauthorized {
-		t.Errorf(
-			"got status %d, want 401",
-			apiErr.StatusCode,
-		)
-	}
+			_, err := c.Status(context.Background())
+			require.Error(t, err)
 
-	if !strings.Contains(apiErr.Body, "unauthorized") {
-		t.Errorf("got body %q", apiErr.Body)
-	}
-
-	if !strings.Contains(apiErr.Error(), "401") {
-		t.Errorf(
-			"Error() should contain status code: %s",
-			apiErr.Error(),
-		)
+			var apiErr *APIError
+			require.True(t,
+				errors.As(err, &apiErr),
+				"expected *APIError, got %T", err,
+			)
+			assert.Equal(t, tt.status, apiErr.StatusCode)
+			assert.Contains(t, apiErr.Body, "detail")
+			assert.Contains(t,
+				apiErr.Error(),
+				"claudebox: HTTP",
+			)
+		})
 	}
 }
 
@@ -105,9 +113,7 @@ func TestWithHTTPClient(t *testing.T) {
 		WithHTTPClient(custom),
 	)
 
-	if c.httpClient != custom {
-		t.Error("custom http client not set")
-	}
+	assert.Equal(t, custom, c.httpClient)
 }
 
 func TestContextCancellation(t *testing.T) {
@@ -124,7 +130,5 @@ func TestContextCancellation(t *testing.T) {
 	cancel()
 
 	_, err := c.Health(ctx)
-	if err == nil {
-		t.Fatal("expected error from cancelled context")
-	}
+	require.Error(t, err)
 }
