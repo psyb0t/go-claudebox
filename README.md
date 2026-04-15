@@ -1,6 +1,6 @@
 # go-claudebox
 
-Go client for the [claudebox](https://github.com/psyb0t/docker-claude-code) API. Lets you run Claude Code prompts, manage files, and check server status from Go.
+Go client for the [claudebox](https://github.com/psyb0t/claudebox) API. Lets you run Claude Code prompts, manage files, and check server status from Go.
 
 ## Features
 
@@ -8,7 +8,7 @@ Go client for the [claudebox](https://github.com/psyb0t/docker-claude-code) API.
 - Upload, download, list, and delete workspace files
 - Check health, status, and cancel running jobs
 - Bearer token auth
-- Zero external dependencies — stdlib only
+- Minimal dependencies — only [ctxerrors](https://github.com/psyb0t/ctxerrors) and [common-go](https://github.com/psyb0t/common-go)
 - Strict linting with zero `//nolint` directives
 
 ## Install
