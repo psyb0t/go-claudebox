@@ -4,7 +4,8 @@ Go client for the [claudebox](https://github.com/psyb0t/docker-claudebox) API. L
 
 ## Features
 
-- Run prompts (sync, fire-and-forget, resume sessions)
+- Run prompts (sync, async, fire-and-forget, resume sessions)
+- Async job management (start, poll, cancel by run ID)
 - Full verbose output with typed turns, tool calls, and tool results
 - Upload, download, list, and delete workspace files
 - Check health, status, and cancel running jobs
@@ -31,6 +32,7 @@ import (
     "io"
     "log"
     "os"
+    "time"
 
     claudebox "github.com/psyb0t/go-claudebox"
 )
@@ -76,6 +78,38 @@ func main() {
                 fmt.Println(block.Text)
             }
         }
+    }
+
+    // Run async — returns immediately
+    async, err := c.RunAsync(context.Background(), &claudebox.RunRequest{
+        Prompt:    "refactor the entire codebase",
+        Workspace: "myproject",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("started run %s\n", async.RunID)
+
+    // Cancel by run ID (if needed):
+    // _, _ = c.CancelRun(context.Background(), async.RunID)
+
+    // Poll for result
+    for {
+        res, err := c.RunResult(context.Background(), async.RunID)
+        if err != nil {
+            log.Fatal(err)
+        }
+        if res.Status == "running" {
+            time.Sleep(5 * time.Second)
+            continue
+        }
+        if res.Status == "completed" {
+            fmt.Println(res.Result.Result)
+        }
+        if res.Status == "failed" {
+            fmt.Printf("failed: %s\n", res.Error)
+        }
+        break
     }
 
     // Upload a file
@@ -135,9 +169,12 @@ func TestMyService(t *testing.T) {
 |---|---|
 | `New(baseURL, ...Option)` | Create client |
 | `Health(ctx)` | `GET /health` |
-| `Status(ctx)` | `GET /status` — busy workspaces |
-| `Run(ctx, *RunRequest)` | `POST /run` — execute prompt |
-| `Cancel(ctx, workspace)` | `POST /run/cancel` |
+| `Status(ctx)` | `GET /status` — busy workspaces + async runs |
+| `Run(ctx, *RunRequest)` | `POST /run` — execute prompt (sync) |
+| `RunAsync(ctx, *RunRequest)` | `POST /run` — start async job |
+| `RunResult(ctx, runID)` | `GET /run/result` — poll async result |
+| `Cancel(ctx, workspace)` | `POST /run/cancel` — by workspace |
+| `CancelRun(ctx, runID)` | `POST /run/cancel` — by run ID |
 | `ListFiles(ctx, path)` | `GET /files` or `GET /files/{path}` |
 | `ReadFile(ctx, path)` | `GET /files/{path}` — streaming download |
 | `WriteFile(ctx, path, content)` | `PUT /files/{path}` |
@@ -166,10 +203,35 @@ func TestMyService(t *testing.T) {
 | `Resume` | `resume` | Resume a previous session |
 | `FireAndForget` | `fireAndForget` | Start and return immediately |
 
+### AsyncRunResponse fields
+
+Returned by `RunAsync`:
+
+| Field | JSON | What |
+|---|---|---|
+| `RunID` | `runId` | Unique run identifier for polling |
+| `Workspace` | `workspace` | Resolved workspace path |
+| `Status` | `status` | Always "running" |
+
+### RunResultResponse fields
+
+Returned by `RunResult`:
+
+| Field | JSON | What |
+|---|---|---|
+| `RunID` | `runId` | The run identifier |
+| `Workspace` | `workspace` | Workspace path (non-completed) |
+| `Status` | `status` | running, completed, cancelled, failed |
+| `Error` | `error` | Error message (failed only) |
+| `Result` | — | Full `*RunResponse` (completed only) |
+
+Results are purged server-side after first read (except running). Unread results expire after 6 hours.
+
 ### RunResponse fields
 
 | Field | JSON | What |
 |---|---|---|
+| `RunID` | `runId` | Run identifier (set for async results) |
 | `Type` | `type` | Always "result" |
 | `Subtype` | `subtype` | "success" or "error" |
 | `Result` | `result` | The response text |

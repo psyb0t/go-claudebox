@@ -603,6 +603,263 @@ func TestCancelInvalidJSON(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRunAsync(t *testing.T) {
+	c, _ := testServer(
+		t,
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "/run", r.URL.Path)
+
+			var body struct {
+				Prompt string `json:"prompt"`
+				Async  bool   `json:"async"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			assert.Equal(t, "do stuff", body.Prompt)
+			assert.True(t, body.Async)
+
+			_, _ = w.Write([]byte(
+				`{"runId":"abc123",` +
+					`"workspace":"/workspaces/myproj",` +
+					`"status":"running"}`,
+			))
+		},
+	)
+
+	resp, err := c.RunAsync(
+		context.Background(),
+		&RunRequest{Prompt: "do stuff"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "abc123", resp.RunID)
+	assert.Equal(t,
+		"/workspaces/myproj", resp.Workspace,
+	)
+	assert.Equal(t, "running", resp.Status)
+}
+
+func TestRunAsyncHTTPError(t *testing.T) {
+	c, _ := testServer(t,
+		errorHandler(t,
+			http.StatusConflict,
+			`{"detail":"workspace busy"}`,
+		),
+	)
+
+	_, err := c.RunAsync(
+		context.Background(),
+		&RunRequest{Prompt: "test"},
+	)
+	require.Error(t, err)
+
+	var apiErr *APIError
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t,
+		http.StatusConflict, apiErr.StatusCode,
+	)
+}
+
+func TestRunAsyncInvalidJSON(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t, `not json`),
+	)
+
+	_, err := c.RunAsync(
+		context.Background(),
+		&RunRequest{Prompt: "test"},
+	)
+	require.Error(t, err)
+}
+
+func TestRunResultRunning(t *testing.T) {
+	c, _ := testServer(
+		t,
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t,
+				"abc123",
+				r.URL.Query().Get("runId"),
+			)
+
+			_, _ = w.Write([]byte(
+				`{"runId":"abc123",` +
+					`"workspace":"/workspaces/proj",` +
+					`"status":"running"}`,
+			))
+		},
+	)
+
+	resp, err := c.RunResult(
+		context.Background(), "abc123",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "abc123", resp.RunID)
+	assert.Equal(t, "running", resp.Status)
+	assert.Equal(t,
+		"/workspaces/proj", resp.Workspace,
+	)
+	assert.Nil(t, resp.Result)
+}
+
+func TestRunResultCompleted(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t,
+			`{"runId":"abc123",`+
+				`"type":"result",`+
+				`"subtype":"success",`+
+				`"result":"all done",`+
+				`"isError":false,`+
+				`"numTurns":3,`+
+				`"durationMs":5000,`+
+				`"usage":{"inputTokens":100,`+
+				`"outputTokens":50}}`,
+		),
+	)
+
+	resp, err := c.RunResult(
+		context.Background(), "abc123",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "abc123", resp.RunID)
+	assert.Equal(t, "completed", resp.Status)
+	require.NotNil(t, resp.Result)
+	assert.Equal(t, "all done", resp.Result.Result)
+	assert.Equal(t, "success", resp.Result.Subtype)
+	assert.Equal(t, 3, resp.Result.NumTurns)
+	assert.Equal(t,
+		100, resp.Result.Usage.InputTokens,
+	)
+	assert.NotNil(t, resp.Result.Raw())
+}
+
+func TestRunResultCancelled(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t,
+			`{"runId":"abc123",`+
+				`"workspace":"/workspaces/proj",`+
+				`"status":"cancelled"}`,
+		),
+	)
+
+	resp, err := c.RunResult(
+		context.Background(), "abc123",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", resp.Status)
+	assert.Nil(t, resp.Result)
+}
+
+func TestRunResultFailed(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t,
+			`{"runId":"abc123",`+
+				`"workspace":"/workspaces/proj",`+
+				`"status":"failed",`+
+				`"error":"process crashed"}`,
+		),
+	)
+
+	resp, err := c.RunResult(
+		context.Background(), "abc123",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", resp.Status)
+	assert.Equal(t, "process crashed", resp.Error)
+	assert.Nil(t, resp.Result)
+}
+
+func TestRunResultNotFound(t *testing.T) {
+	c, _ := testServer(t,
+		errorHandler(t,
+			http.StatusNotFound,
+			`{"detail":"run not found"}`,
+		),
+	)
+
+	_, err := c.RunResult(
+		context.Background(), "nonexistent",
+	)
+	require.Error(t, err)
+
+	var apiErr *APIError
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t,
+		http.StatusNotFound, apiErr.StatusCode,
+	)
+}
+
+func TestRunResultInvalidJSON(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t, `not json`),
+	)
+
+	_, err := c.RunResult(
+		context.Background(), "abc",
+	)
+	require.Error(t, err)
+}
+
+func TestCancelRun(t *testing.T) {
+	c, _ := testServer(
+		t,
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t,
+				"abc123",
+				r.URL.Query().Get("runId"),
+			)
+
+			_, _ = w.Write([]byte(
+				`{"status":"ok",` +
+					`"runId":"abc123",` +
+					`"workspace":"/workspaces/proj"}`,
+			))
+		},
+	)
+
+	resp, err := c.CancelRun(
+		context.Background(), "abc123",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Status)
+	assert.Equal(t, "abc123", resp.RunID)
+	assert.Equal(t,
+		"/workspaces/proj", resp.Workspace,
+	)
+}
+
+func TestCancelRunNotFound(t *testing.T) {
+	c, _ := testServer(t,
+		errorHandler(t,
+			http.StatusNotFound,
+			`{"detail":"run not found"}`,
+		),
+	)
+
+	_, err := c.CancelRun(
+		context.Background(), "nonexistent",
+	)
+	require.Error(t, err)
+
+	var apiErr *APIError
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t,
+		http.StatusNotFound, apiErr.StatusCode,
+	)
+}
+
+func TestCancelRunInvalidJSON(t *testing.T) {
+	c, _ := testServer(t,
+		jsonHandler(t, `not json`),
+	)
+
+	_, err := c.CancelRun(
+		context.Background(), "abc",
+	)
+	require.Error(t, err)
+}
+
 func TestRunHTTPErrors(t *testing.T) {
 	tests := []struct {
 		name   string

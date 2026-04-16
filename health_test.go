@@ -52,14 +52,19 @@ func TestStatus(t *testing.T) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			assert.Equal(t, "/status", r.URL.Path)
 
-			_ = json.NewEncoder(w).Encode(
-				StatusResponse{
-					BusyWorkspaces: []string{
-						"/workspaces/foo",
-						"/workspaces/bar",
-					},
-				},
-			)
+			_, _ = w.Write([]byte(
+				`{"busyWorkspaces":[` +
+					`"/workspaces/foo",` +
+					`"/workspaces/bar"],` +
+					`"runs":[` +
+					`{"runId":"r1",` +
+					`"workspace":"/workspaces/foo",` +
+					`"status":"running"},` +
+					`{"runId":"r2",` +
+					`"workspace":"/workspaces/bar",` +
+					`"status":"completed"}` +
+					`]}`,
+			))
 		},
 	)
 
@@ -69,6 +74,17 @@ func TestStatus(t *testing.T) {
 		"/workspaces/foo",
 		"/workspaces/bar",
 	}, resp.BusyWorkspaces)
+
+	require.Len(t, resp.Runs, 2)
+	assert.Equal(t, "r1", resp.Runs[0].RunID)
+	assert.Equal(t,
+		"/workspaces/foo", resp.Runs[0].Workspace,
+	)
+	assert.Equal(t, "running", resp.Runs[0].Status)
+	assert.Equal(t, "r2", resp.Runs[1].RunID)
+	assert.Equal(t,
+		"completed", resp.Runs[1].Status,
+	)
 }
 
 func TestStatusEmpty(t *testing.T) {

@@ -27,6 +27,7 @@ type RunRequest struct {
 
 // RunResponse is the JSON response from POST /run.
 type RunResponse struct {
+	RunID         string                `json:"runId,omitempty"`
 	Type          string                `json:"type"`
 	Subtype       string                `json:"subtype"`
 	Result        string                `json:"result"`
@@ -173,9 +174,157 @@ func (c *Client) Run(
 	return &rr, nil
 }
 
+// asyncRunRequest wraps RunRequest with the async flag
+// for internal use by RunAsync.
+type asyncRunRequest struct {
+	RunRequest
+	Async bool `json:"async"`
+}
+
+// AsyncRunResponse is returned by POST /run when async
+// mode is enabled.
+type AsyncRunResponse struct {
+	RunID     string `json:"runId"`
+	Workspace string `json:"workspace"`
+	Status    string `json:"status"`
+}
+
+// RunAsync starts an async run and returns immediately.
+// Poll with RunResult to get the outcome.
+func (c *Client) RunAsync(
+	ctx context.Context,
+	req *RunRequest,
+) (*AsyncRunResponse, error) {
+	body := asyncRunRequest{
+		RunRequest: *req,
+		Async:      true,
+	}
+
+	resp, err := c.do(
+		ctx, http.MethodPost, "/run", &body,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := checkStatus(resp); err != nil {
+		return nil, err
+	}
+
+	var v AsyncRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(
+		&v,
+	); err != nil {
+		return nil, ctxerrors.Wrap(
+			err, "decode response",
+		)
+	}
+
+	return &v, nil
+}
+
+// RunResultResponse is the response from
+// GET /run/result. Check Status to determine the
+// outcome:
+//   - "running": still in progress
+//   - "completed": Result is populated
+//   - "cancelled": run was cancelled
+//   - "failed": Error contains the failure message
+type RunResultResponse struct {
+	RunID     string `json:"runId"`
+	Workspace string `json:"workspace,omitempty"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+
+	// Result is set when Status is "completed".
+	Result *RunResponse `json:"-"`
+}
+
+// decodeRunResult parses raw JSON into a
+// RunResultResponse, handling both in-progress status
+// responses and completed full results.
+func decodeRunResult(raw []byte) (
+	*RunResultResponse, error,
+) {
+	var probe struct {
+		RunID     string `json:"runId"`
+		Workspace string `json:"workspace"`
+		Status    string `json:"status"`
+		Error     string `json:"error"`
+	}
+
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, ctxerrors.Wrap(
+			err, "decode response",
+		)
+	}
+
+	rr := &RunResultResponse{
+		RunID:     probe.RunID,
+		Workspace: probe.Workspace,
+		Status:    probe.Status,
+		Error:     probe.Error,
+	}
+
+	if probe.Status == "running" ||
+		probe.Status == "cancelled" ||
+		probe.Status == "failed" {
+		return rr, nil
+	}
+
+	// completed — decode full result
+	var result RunResponse
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, ctxerrors.Wrap(
+			err, "decode result",
+		)
+	}
+
+	result.raw = raw
+	rr.Status = "completed"
+	rr.Result = &result
+
+	return rr, nil
+}
+
+// RunResult polls for the result of an async run.
+// Results are purged after first read (except running).
+func (c *Client) RunResult(
+	ctx context.Context,
+	runID string,
+) (*RunResultResponse, error) {
+	endpoint := "/run/result?runId=" +
+		url.QueryEscape(runID)
+
+	resp, err := c.do(
+		ctx, http.MethodGet, endpoint, nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := checkStatus(resp); err != nil {
+		return nil, err
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, ctxerrors.Wrap(
+			err, "read response",
+		)
+	}
+
+	return decodeRunResult(raw)
+}
+
 // CancelResponse is the response from POST /run/cancel.
 type CancelResponse struct {
 	Status    string `json:"status"`
+	RunID     string `json:"runId,omitempty"`
 	Workspace string `json:"workspace"`
 }
 
@@ -215,4 +364,37 @@ func (c *Client) Cancel(
 	}
 
 	return &v, nil
+}
+
+// CancelRun cancels a running async job by run ID.
+func (c *Client) CancelRun(
+	ctx context.Context,
+	runID string,
+) (*CancelResponse, error) {
+	endpoint := "/run/cancel?runId=" +
+		url.QueryEscape(runID)
+
+	resp, err := c.do(
+		ctx, http.MethodPost, endpoint, nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := checkStatus(resp); err != nil {
+		return nil, err
+	}
+
+	var cr CancelResponse
+	if err := json.NewDecoder(resp.Body).Decode(
+		&cr,
+	); err != nil {
+		return nil, ctxerrors.Wrap(
+			err, "decode response",
+		)
+	}
+
+	return &cr, nil
 }

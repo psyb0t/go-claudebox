@@ -10,7 +10,7 @@ import "context"
 
 // Claudebox is the interface for all claudebox API
 // operations. Implement this for mocking in tests.
-type Claudebox interface {
+type Claudebox interface { //nolint:interfacebloat // all API operations
 	// Health checks if the server is up.
 	Health(ctx context.Context) (*HealthResponse, error)
 
@@ -23,11 +23,30 @@ type Claudebox interface {
 		req *RunRequest,
 	) (*RunResponse, error)
 
+	// RunAsync starts an async run and returns
+	// immediately. Poll with RunResult.
+	RunAsync(
+		ctx context.Context,
+		req *RunRequest,
+	) (*AsyncRunResponse, error)
+
+	// RunResult polls for the result of an async run.
+	RunResult(
+		ctx context.Context,
+		runID string,
+	) (*RunResultResponse, error)
+
 	// Cancel kills a running process in the given
 	// workspace (empty = default).
 	Cancel(
 		ctx context.Context,
 		workspace string,
+	) (*CancelResponse, error)
+
+	// CancelRun cancels a running async job by run ID.
+	CancelRun(
+		ctx context.Context,
+		runID string,
 	) (*CancelResponse, error)
 
 	// ListFiles lists files at the given path

@@ -130,7 +130,10 @@ type mockClaudebox struct {
 	healthFunc     func(context.Context) (*HealthResponse, error)
 	statusFunc     func(context.Context) (*StatusResponse, error)
 	runFunc        func(context.Context, *RunRequest) (*RunResponse, error)
+	runAsyncFunc   func(context.Context, *RunRequest) (*AsyncRunResponse, error)
+	runResultFunc  func(context.Context, string) (*RunResultResponse, error)
 	cancelFunc     func(context.Context, string) (*CancelResponse, error)
+	cancelRunFunc  func(context.Context, string) (*CancelResponse, error)
 	listFilesFunc  func(context.Context, string) (*ListFilesResponse, error)
 	readFileFunc   func(context.Context, string) (*ReadFileResponse, error)
 	writeFileFunc  func(context.Context, string, []byte) (*WriteFileResponse, error)
@@ -156,11 +159,32 @@ func (m *mockClaudebox) Run(
 	return m.runFunc(ctx, req)
 }
 
+func (m *mockClaudebox) RunAsync(
+	ctx context.Context,
+	req *RunRequest,
+) (*AsyncRunResponse, error) {
+	return m.runAsyncFunc(ctx, req)
+}
+
+func (m *mockClaudebox) RunResult(
+	ctx context.Context,
+	runID string,
+) (*RunResultResponse, error) {
+	return m.runResultFunc(ctx, runID)
+}
+
 func (m *mockClaudebox) Cancel(
 	ctx context.Context,
 	workspace string,
 ) (*CancelResponse, error) {
 	return m.cancelFunc(ctx, workspace)
+}
+
+func (m *mockClaudebox) CancelRun(
+	ctx context.Context,
+	runID string,
+) (*CancelResponse, error) {
+	return m.cancelRunFunc(ctx, runID)
 }
 
 func (m *mockClaudebox) ListFiles(
